@@ -3,5 +3,6 @@
 
 # Except these files
 !manifest.yml
+!manifest-v3.yml
 !README.md
 !.gitignore

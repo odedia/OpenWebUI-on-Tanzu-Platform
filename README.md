@@ -103,6 +103,59 @@ You can add new models at any time without changing code or redeploying:
 
 ---
 
+## 🏢 Enterprise Edition (manifest-v3.yml)
+
+For production deployments requiring persistent storage, secrets management, and auto-scaling, use `manifest-v3.yml`.
+
+### Additional Services Required
+
+#### 1. CredHub (Secrets Management)
+Store sensitive values like `WEBUI_SECRET_KEY` securely:
+
+```bash
+# Generate a secure random key
+SECRET_KEY=$(openssl rand -hex 32)
+
+# Create CredHub service with the secret
+cf create-service credhub default owui-secrets -c "{\"webui_secret_key\":\"$SECRET_KEY\"}"
+```
+
+#### 2. App Autoscaler
+Automatically scale instances based on load:
+
+```bash
+cf create-service autoscaler standard owui-autoscaler
+```
+
+After deployment, configure scaling rules:
+```bash
+# Example: Scale between 2-10 instances based on HTTP latency
+cf update-service owui-autoscaler -c '{
+  "instance_limits": {"min": 2, "max": 10},
+  "scaling_rules": [{
+    "metric_type": "http_latency",
+    "threshold": {"min": 10, "max": 500},
+    "adjustment": "+1"
+  }]
+}'
+```
+
+#### 3. NFS Volume (Persistent Uploads)
+Persist uploaded documents across restarts and scaling:
+
+```bash
+# Replace with your NFS server details
+cf create-service nfs Existing owui-nfs -c '{"share":"nfs-server.example.com/exports/openwebui","mount":"/home/vcap/nfs/openwebui"}'
+```
+
+### Deploy Enterprise Edition
+
+```bash
+cf push -f manifest-v3.yml
+```
+
+---
+
 ## 📋 Manifest Defaults
 
 | Setting | Value | Notes |

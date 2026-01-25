@@ -1,0 +1,103 @@
+applications:
+  - name: open-webui
+    docker:
+      image: ghcr.io/open-webui/open-webui:main
+    instances: 2
+    memory: 3G
+    disk_quota: 6G
+    timeout: 180
+    services:
+      - chat
+      - embed
+      - sso
+      - owui-postgres
+      - owui-secrets      # CredHub service for secrets
+      - owui-autoscaler   # App Autoscaler service
+      - owui-nfs          # NFS volume for persistent uploads
+    env:
+      # --- LOGGING ---
+      LOG_LEVEL: "INFO"
+      
+      # --- Change to False in airgapped/firewalled environments ---
+      ENABLE_WEBSOCKET_SUPPORT: "True"
+      ENABLE_OLLAMA_API: "False"
+      ENABLE_OLLAMA_SIDEBAR: "False"
+      OLLAMA_BASE_URL: ""
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      TMPDIR: "/home/vcap/tmp"
+      TIKTOKEN_CACHE_DIR: "/home/vcap/tmp/tiktoken"
+      HF_HOME: "/home/vcap/tmp/hf"
+      WEBUI_AUTH: "True"
+      # WEBUI_SECRET_KEY now comes from CredHub (see boot.py)
+      WEBUI_NAME: "Tanzu Platform"
+      OAUTH_USER_NAME_CLAIM: "user_name"
+      ENABLE_SIGNUP: "True"
+      WHITELISTED_EMAILS: "admin,odedia"
+      OAUTH_SCOPES: "openid"
+      ENABLE_PERSISTENT_CONFIG: "False"
+      VECTOR_DB: "pgvector"
+      RAG_EMBEDDING_ENGINE: "openai"
+      RAG_EMBEDDING_BATCH_SIZE: "1"
+      
+      # These flags help, but the boot.py patch below is the real fix
+      HTTP_CLIENT_VERIFY_SSL_CERT: "false"
+      REQUESTS_VERIFY: "False"
+      PYTHONUNBUFFERED: "1"
+      
+      # --- NFS Volume Mount Path ---
+      DATA_DIR: "/home/vcap/nfs/openwebui"
+
+    command: |
+      cat <<'EOF' > boot.py
+      import ssl,os,json,uvicorn
+      try:
+       import requests;from requests.packages.urllib3.exceptions import InsecureRequestWarning
+       requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+       _r=requests.Session.request
+       requests.Session.request=lambda s,m,u,*a,**k:_r(s,m,u,*a,**{**k,'verify':False})
+      except:pass
+      try:
+       C=ssl._create_unverified_context;ssl.create_default_context=lambda *a,**k:C();ssl._create_default_https_context=lambda *a,**k:C()
+      except:pass
+      def boot():
+       v=json.loads(os.environ.get('VCAP_SERVICES','{}'))
+       for p in["/home/vcap/tmp/tiktoken","/home/vcap/tmp/hf","/home/vcap/tmp/cache","/home/vcap/nfs/openwebui"]:os.makedirs(p,exist_ok=True)
+       # CredHub secret extraction
+       for sl in v.values():
+        for s in sl:
+         c=s.get('credentials',{})
+         if c.get('webui_secret_key'):os.environ['WEBUI_SECRET_KEY']=c['webui_secret_key'];print("BOOT: Secret from CredHub")
+       # Postgres config
+       for sl in v.values():
+        for s in sl:
+         c=s.get('credentials',{})
+         for x in[c.get('jdbcUrl'),c.get('uri'),c.get('url')]:
+          if x and 'postgres' in x and not x.startswith('http'):
+           u=x.replace('jdbc:','',1).replace('postgres://','postgresql://',1)
+           os.environ['PGVECTOR_DB_URL']=u;os.environ['DATABASE_URL']=u;break
+       # GenAI services
+       c_u=[];c_k=[];e_c=None
+       for l,sl in v.items():
+        for s in sl:
+         if not('genai' in l.lower() or 'genai' in str(s.get('tags',[])).lower()):continue
+         c=s.get('credentials',{});t=c.get('endpoint',c);u=t.get('api_base')or t.get('uri')
+         if not u:continue
+         k=t.get('api_token')or t.get('api_key')or c.get('api_key')or"sk-p"
+         b=u.rstrip('/');b+=('/v1' if b.endswith('/openai') else '' if '/v1' in b else '/openai/v1')
+         m=c.get('model_name')or t.get('model')or"u-m"
+         if 'embed' in s.get('name','').lower() or 'embed' in str(s.get('tags',[])).lower():
+          e_c={'u':b,'k':k,'m':m};print(f"BOOT: Embed:{s['name']}")
+         else:c_u.append(b);c_k.append(k);print(f"BOOT: Chat:{s['name']}")
+       if c_u:os.environ['OPENAI_API_BASE_URLS']=';'.join(c_u);os.environ['OPENAI_API_KEYS']=';'.join(c_k);os.environ['OPENAI_API_BASE_URL']=c_u[0];os.environ['OPENAI_API_KEY']=c_k[0]
+       if e_c:os.environ['RAG_OPENAI_API_BASE_URL']=e_c['u'];os.environ['RAG_OPENAI_API_KEY']=e_c['k'];os.environ['RAG_EMBEDDING_MODEL']=e_c['m']
+       elif c_u:os.environ['RAG_OPENAI_API_BASE_URL']=c_u[0];os.environ['RAG_OPENAI_API_KEY']=c_k[0]
+       # SSO config
+       s=next((x['credentials'] for k,z in v.items() if 'p-identity' in k or 'sso' in k for x in z),None)
+       if s:
+        d=s.get('auth_domain','');d=f"https://{d}" if not d.startswith('http') else d
+        os.environ.update({'ENABLE_OAUTH_SIGNUP':'True','OAUTH_MERGE_ACCOUNTS_BY_EMAIL':'True','OAUTH_PROVIDER_NAME':'Tanzu SSO','OAUTH_CLIENT_ID':s['client_id'],'OAUTH_CLIENT_SECRET':s['client_secret'],'OPENID_PROVIDER_URL':f"{d.rstrip('/')}/.well-known/openid-configuration"})
+       uvicorn.run("open_webui.main:app",host="0.0.0.0",port=int(os.environ.get('PORT',8080)),forwarded_allow_ips="*")
+      if __name__=="__main__":boot()
+      EOF
+      exec python3 boot.py
