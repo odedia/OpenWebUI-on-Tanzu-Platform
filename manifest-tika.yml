@@ -1,0 +1,11 @@
+applications:
+  - name: tika-server
+    docker:
+      image: apache/tika:latest-full
+    instances: 1
+    memory: 1G
+    disk_quota: 2G
+    timeout: 180
+    routes:
+      - route: tika-server.apps.internal
+    command: java -jar /tika-server-standard.jar --host 0.0.0.0 --port $PORT

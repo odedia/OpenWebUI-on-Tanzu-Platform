@@ -1,5 +1,5 @@
 applications:
-  - name: open-webui-v2
+  - name: open-webui
     docker:
       image: ghcr.io/open-webui/open-webui:main
     instances: 2
@@ -15,7 +15,7 @@ applications:
       # --- LOGGING ---
       LOG_LEVEL: "INFO"
       
-      # --- CONFIG ---
+      # --- Change to False in airgapped/firewalled environments ---
       ENABLE_WEBSOCKET_SUPPORT: "False"
       ENABLE_OLLAMA_API: "False"
       ENABLE_OLLAMA_SIDEBAR: "False"
@@ -41,6 +41,10 @@ applications:
       HTTP_CLIENT_VERIFY_SSL_CERT: "false"
       REQUESTS_VERIFY: "False"
       PYTHONUNBUFFERED: "1"
+      
+      # --- RTL/Hebrew PDF Support via Apache Tika ---
+      CONTENT_EXTRACTION_ENGINE: "tika"
+      TIKA_SERVER_URL: "http://tika-server.apps.internal:8080"
 
     command: |
       cat <<'EOF' > boot.py

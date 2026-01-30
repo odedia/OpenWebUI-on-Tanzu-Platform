@@ -4,5 +4,6 @@
 # Except these files
 !manifest.yml
 !manifest-v3.yml
+!manifest-tika.yml
 !README.md
 !.gitignore

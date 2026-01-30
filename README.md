@@ -103,6 +103,26 @@ You can add new models at any time without changing code or redeploying:
 
 ---
 
+## 🌍 RTL/Hebrew PDF Support (Optional)
+
+For improved text extraction from Hebrew, Arabic, and other RTL documents, deploy the Apache Tika sidecar:
+
+### 1. Deploy Tika Server
+
+```bash
+cf push -f manifest-tika.yml
+```
+
+### 2. Enable Container-to-Container Networking
+
+```bash
+cf add-network-policy open-webui tika-server --port 8080 --protocol tcp
+```
+
+The main `manifest.yml` is pre-configured to use Tika when available. If Tika is unreachable, Open WebUI falls back to its default PDF parser.
+
+---
+
 ## 🏢 Enterprise Edition (manifest-v3.yml)
 
 For production deployments requiring persistent storage, secrets management, and auto-scaling, use `manifest-v3.yml`.
