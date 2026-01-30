@@ -110,7 +110,9 @@ For improved text extraction from Hebrew, Arabic, and other RTL documents, deplo
 ### 1. Deploy Tika Server
 
 ```bash
-cf push -f manifest-tika.yml
+cd tika
+cf push
+cd ..
 ```
 
 ### 2. Enable Container-to-Container Networking
