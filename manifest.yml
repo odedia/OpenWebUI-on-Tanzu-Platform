@@ -11,6 +11,7 @@ applications:
       - embed
       - sso
       - owui-postgres
+      - gpt-120b
     env:
       # --- LOGGING ---
       LOG_LEVEL: "INFO"
@@ -44,7 +45,17 @@ applications:
       
       # --- RTL/Hebrew PDF Support via Apache Tika ---
       CONTENT_EXTRACTION_ENGINE: "tika"
-      TIKA_SERVER_URL: "http://tika-server.apps.internal:8080"
+      TIKA_SERVER_URL: "http://tika-server.apps.internal:9998"
+      
+      # --- Hebrew-optimized RAG Settings ---
+      RAG_TEXT_SPLITTER: "character"              # Better for Hebrew than token-based
+      CHUNK_OVERLAP: "200"                         # More overlap for Hebrew context
+      RAG_TOP_K: "5"                               # More results for better coverage
+      ENABLE_RAG_HYBRID_SEARCH: "True"             # Combines keyword + semantic search
+      ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS: "True"  # Enriches search with metadata
+      
+      # --- Keep titles in user's language ---
+      TITLE_GENERATION_PROMPT_TEMPLATE: "Generate a concise chat title in the SAME LANGUAGE as the user's first message. Do not translate to English."
 
     command: |
       cat <<'EOF' > boot.py
@@ -52,8 +63,7 @@ applications:
       try:
        import requests;from requests.packages.urllib3.exceptions import InsecureRequestWarning
        requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
-       _r=requests.Session.request
-       requests.Session.request=lambda s,m,u,*a,**k:_r(s,m,u,*a,**{**k,'verify':False})
+       os.environ['REQUESTS_CA_BUNDLE']='';os.environ['CURL_CA_BUNDLE']=''
       except:pass
       try:
        C=ssl._create_unverified_context;ssl.create_default_context=lambda *a,**k:C();ssl._create_default_https_context=lambda *a,**k:C()

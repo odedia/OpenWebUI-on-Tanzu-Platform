@@ -1,11 +1,4 @@
-# Ignore everything
-*
+# Ignore Tarballs
+*.tar
+.DS_Store
 
-# Except these files
-!manifest.yml
-!manifest-v3.yml
-!tika/
-!tika/manifest.yml
-!tika/*.jar
-!README.md
-!.gitignore

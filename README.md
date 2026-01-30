@@ -4,6 +4,8 @@ This repository contains a **zero-dependency, single-file manifest** for deployi
 
 It is specifically designed for enterprise environments where simplicity, speed, and air-gapped compatibility are priorities.
 
+![Setup Plan](Setup%20plan.png)
+
 ---
 
 ## ⚠️ Disclaimer & Warnings
@@ -110,15 +112,13 @@ For improved text extraction from Hebrew, Arabic, and other RTL documents, deplo
 ### 1. Deploy Tika Server
 
 ```bash
-cd tika
-cf push
-cd ..
+cd push -f manifest-tika.yml
 ```
 
 ### 2. Enable Container-to-Container Networking
 
 ```bash
-cf add-network-policy open-webui tika-server --port 8080 --protocol tcp
+cf add-network-policy open-webui tika-server --port 9998 --protocol tcp
 ```
 
 The main `manifest.yml` is pre-configured to use Tika when available. If Tika is unreachable, Open WebUI falls back to its default PDF parser.
