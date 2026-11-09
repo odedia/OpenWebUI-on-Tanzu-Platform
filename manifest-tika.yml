@@ -1,11 +1,19 @@
+# Apache Tika server for Open WebUI (text extraction for RTL languages such as Hebrew and Arabic).
+# Reached only over container-to-container networking: internal route, no public route.
+#
+# Tika listens on port 9998, fixed below so it always matches the network policy:
+#   cf add-network-policy open-webui tika-server --port 9998 --protocol tcp
+# Tika 4 returns Markdown, so Open WebUI needs TIKA_SERVER_VERSION: "4" (set in its manifest).
 applications:
   - name: tika-server
     docker:
-      image: apache/tika:latest-full
-    instances: 1
-    memory: 1G
-    disk_quota: 2G
+      image: apache/tika:4.2.0-full
+    instances: 2          # apps.internal resolves to every instance, so this gives redundancy
+    memory: 4G            # Tika runs a pool of child JVMs; 2G peaked at 98% under 8 parallel PDFs
+    disk_quota: 4G
+    health-check-type: http
+    health-check-http-endpoint: /version
     timeout: 180
     routes:
       - route: tika-server.apps.internal
-    command: java -cp "/tika-server-standard-3.2.3.jar:/tika-extras/*" org.apache.tika.server.core.TikaServerCli -h 0.0.0.0 -p $PORT
+    command: java -cp "/opt/tika-server/*:/opt/tika-server/lib/*:/tika-extras/*" org.apache.tika.server.core.TikaServerCli -h 0.0.0.0 -p 9998

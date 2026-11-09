@@ -1,103 +1,136 @@
+# Open WebUI on Tanzu Platform for Cloud Foundry
+#
+# Pinned to Open WebUI v0.13.2 (released 2026-11-08). To upgrade: back up Postgres, change the
+# image tag and `cf push`. Migrations are forward-only. Never upgrade with --strategy rolling:
+# old and new versions cannot share a database (boot.py serializes migrations with a lock).
+#
+# boot.py (below) reads VCAP_SERVICES and wires up Postgres/pgvector, every ai-models binding
+# (chat + embedding models discovered from /v1/models), Redis/Valkey, volume mounts and Tanzu SSO.
 applications:
   - name: open-webui
     docker:
-      image: ghcr.io/open-webui/open-webui:main
-    instances: 2
+      image: ghcr.io/open-webui/open-webui:v0.13.2
+    instances: 1          # for more than one instance use manifest-production.yml
     memory: 3G
-    disk_quota: 6G
-    timeout: 180
+    disk_quota: 8G        # the image alone is about 4.6 GB
+    health-check-type: http
+    health-check-http-endpoint: /health
+    timeout: 300          # first start runs migrations and copies static assets
     services:
-      - chat
-      - embed
-      - sso
-      - owui-postgres
-      - gpt-120b
+      - qwen3.5-27b       # ai-models / tanzu-all-models: chat + embedding models in one binding
+      - sso               # p-identity (UAA)
+      - owui-postgres     # postgres: app DB + pgvector vector store
     env:
-      # --- LOGGING ---
+      # --- Logging ---
       LOG_LEVEL: "INFO"
-      
-      # --- Change to False in airgapped/firewalled environments ---
+      PYTHONUNBUFFERED: "1"
+
+      # --- Transport ---
+      # "True" = browsers use a pure WebSocket, so no sticky sessions are needed behind gorouter.
+      # "False" = HTTP long-polling, only safe with ONE instance (polling needs session affinity).
       ENABLE_WEBSOCKET_SUPPORT: "False"
-      ENABLE_OLLAMA_API: "False"
-      ENABLE_OLLAMA_SIDEBAR: "False"
-      OLLAMA_BASE_URL: ""
+
+      # --- Air-gapped / offline ---
+      OFFLINE_MODE: "true"            # no version-update check, no HuggingFace Hub downloads
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
+      ENABLE_OLLAMA_API: "False"
+      OLLAMA_BASE_URL: ""
       TMPDIR: "/home/vcap/tmp"
       TIKTOKEN_CACHE_DIR: "/home/vcap/tmp/tiktoken"
       HF_HOME: "/home/vcap/tmp/hf"
+
+      # --- Authentication ---
       WEBUI_AUTH: "True"
+      # Signs login sessions. Replace with a long random string; changing it later logs everyone out.
       WEBUI_SECRET_KEY: "tanzu-secret-key"
       WEBUI_NAME: "Tanzu Platform"
-      OAUTH_USER_NAME_CLAIM: "user_name"
-      ENABLE_SIGNUP: "True"
-      WHITELISTED_EMAILS: "admin,odedia"
+      ENABLE_SIGNUP: "False"          # no local email/password accounts; SSO accounts are still created (boot.py sets ENABLE_OAUTH_SIGNUP)
+      ENABLE_LOGIN_FORM: "False"      # hide the email/password form, leaving only the "Continue with Tanzu SSO" button
+      DEFAULT_USER_ROLE: "pending"    # later SSO sign-ins wait for admin approval (first account becomes admin)
+      # Display name = the "name" claim (UAA builds it from given_name + family_name of the
+      # identity provider). Refreshed on every login, so existing users get fixed on next sign-in.
+      OAUTH_USERNAME_CLAIM: "name"
+      OAUTH_UPDATE_NAME_ON_LOGIN: "True"
       OAUTH_SCOPES: "openid"
+      # Settings come from this manifest on every start. Admin Settings changes are NOT saved and,
+      # with several instances, apply only to the instance that served the request. Change them here.
       ENABLE_PERSISTENT_CONFIG: "False"
+
+      # --- TLS: trust lab / self-signed certificates (boot.py patches ssl as well) ---
+      REQUESTS_VERIFY: "False"
+      AIOHTTP_CLIENT_SESSION_SSL: "False"
+
+      # --- RAG (embedding endpoint + model are discovered from the ai-models binding at boot) ---
       VECTOR_DB: "pgvector"
       RAG_EMBEDDING_ENGINE: "openai"
-      RAG_EMBEDDING_BATCH_SIZE: "1"
-      
-      # These flags help, but the boot.py patch below is the real fix
-      HTTP_CLIENT_VERIFY_SSL_CERT: "false"
-      REQUESTS_VERIFY: "False"
-      PYTHONUNBUFFERED: "1"
-      
-      # --- RTL/Hebrew PDF Support via Apache Tika ---
+      RAG_EMBEDDING_BATCH_SIZE: "8"
+      RAG_EMBEDDING_CONCURRENT_REQUESTS: "2"      # parallel embedding calls per upload; more does not help, the GPU service is the limit
+
+      # --- RTL/Hebrew PDF support via Apache Tika (push manifest-tika.yml first, see README) ---
+      # Needs:  cf add-network-policy open-webui tika-server --port 9998 --protocol tcp
+      # boot.py logs "BOOT: Tika OK" or "BOOT: Tika NOT reachable" at startup.
+      # There is NO fallback: if Tika is unreachable, PDF/Office uploads fail. Remove these three
+      # lines to use the built-in extractor instead.
       CONTENT_EXTRACTION_ENGINE: "tika"
       TIKA_SERVER_URL: "http://tika-server.apps.internal:9998"
-      
-      # --- Hebrew-optimized RAG Settings ---
-      RAG_TEXT_SPLITTER: "character"              # Better for Hebrew than token-based
-      CHUNK_OVERLAP: "200"                         # More overlap for Hebrew context
-      RAG_TOP_K: "5"                               # More results for better coverage
-      ENABLE_RAG_HYBRID_SEARCH: "True"             # Combines keyword + semantic search
-      ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS: "True"  # Enriches search with metadata
-      
-      # --- Keep titles in user's language ---
+      TIKA_SERVER_VERSION: "4"
+
+      # --- Hebrew-optimized RAG settings ---
+      RAG_TEXT_SPLITTER: "character"              # better for Hebrew than token-based
+      CHUNK_OVERLAP: "200"
+      RAG_TOP_K: "5"
+      ENABLE_RAG_HYBRID_SEARCH: "True"            # keyword + semantic
+      ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS: "True"
+
+      # --- Open Terminal (optional) ---
+      # Pre-configured terminal servers, visible to everyone when access_grants is "*" (omit
+      # access_grants for admin-only). Uncomment and fill in the URL and key (see README).
+      # TERMINAL_SERVER_CONNECTIONS: '[{"id":"ops","name":"Ops box","url":"https://terminal.example.com","auth_type":"bearer","key":"...","config":{"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]}}]'
+
+      # --- Keep chat titles in the user's language ---
       TITLE_GENERATION_PROMPT_TEMPLATE: "Generate a concise chat title in the SAME LANGUAGE as the user's first message. Do not translate to English."
 
-    command: |
-      cat <<'EOF' > boot.py
-      import ssl,os,json,uvicorn
-      try:
-       import requests;from requests.packages.urllib3.exceptions import InsecureRequestWarning
-       requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
-       os.environ['REQUESTS_CA_BUNDLE']='';os.environ['CURL_CA_BUNDLE']=''
-      except:pass
-      try:
-       C=ssl._create_unverified_context;ssl.create_default_context=lambda *a,**k:C();ssl._create_default_https_context=lambda *a,**k:C()
-      except:pass
-      def boot():
-       v=json.loads(os.environ.get('VCAP_SERVICES','{}'))
-       for p in["/home/vcap/tmp/tiktoken","/home/vcap/tmp/hf","/home/vcap/tmp/cache"]:os.makedirs(p,exist_ok=True)
-       for sl in v.values():
-        for s in sl:
-         c=s.get('credentials',{})
-         for x in[c.get('jdbcUrl'),c.get('uri'),c.get('url')]:
-          if x and 'postgres' in x and not x.startswith('http'):
-           u=x.replace('jdbc:','',1).replace('postgres://','postgresql://',1)
-           os.environ['PGVECTOR_DB_URL']=u;os.environ['DATABASE_URL']=u;break
-       c_u=[];c_k=[];e_c=None
-       for l,sl in v.items():
-        for s in sl:
-         if not('genai' in l.lower() or 'genai' in str(s.get('tags',[])).lower()):continue
-         c=s.get('credentials',{});t=c.get('endpoint',c);u=t.get('api_base')or t.get('uri')
-         if not u:continue
-         k=t.get('api_token')or t.get('api_key')or c.get('api_key')or"sk-p"
-         b=u.rstrip('/');b+=('/v1' if b.endswith('/openai') else '' if '/v1' in b else '/openai/v1')
-         m=c.get('model_name')or t.get('model')or"u-m"
-         if 'embed' in s.get('name','').lower() or 'embed' in str(s.get('tags',[])).lower():
-          e_c={'u':b,'k':k,'m':m};print(f"BOOT: Embed:{s['name']}")
-         else:c_u.append(b);c_k.append(k);print(f"BOOT: Chat:{s['name']}")
-       if c_u:os.environ['OPENAI_API_BASE_URLS']=';'.join(c_u);os.environ['OPENAI_API_KEYS']=';'.join(c_k);os.environ['OPENAI_API_BASE_URL']=c_u[0];os.environ['OPENAI_API_KEY']=c_k[0]
-       if e_c:os.environ['RAG_OPENAI_API_BASE_URL']=e_c['u'];os.environ['RAG_OPENAI_API_KEY']=e_c['k'];os.environ['RAG_EMBEDDING_MODEL']=e_c['m']
-       elif c_u:os.environ['RAG_OPENAI_API_BASE_URL']=c_u[0];os.environ['RAG_OPENAI_API_KEY']=c_k[0]
-       s=next((x['credentials'] for k,z in v.items() if 'p-identity' in k or 'sso' in k for x in z),None)
-       if s:
-        d=s.get('auth_domain','');d=f"https://{d}" if not d.startswith('http') else d
-        os.environ.update({'ENABLE_OAUTH_SIGNUP':'True','OAUTH_MERGE_ACCOUNTS_BY_EMAIL':'True','OAUTH_PROVIDER_NAME':'Tanzu SSO','OAUTH_CLIENT_ID':s['client_id'],'OAUTH_CLIENT_SECRET':s['client_secret'],'OPENID_PROVIDER_URL':f"{d.rstrip('/')}/.well-known/openid-configuration"})
-       uvicorn.run("open_webui.main:app",host="0.0.0.0",port=int(os.environ.get('PORT',8080)),forwarded_allow_ips="*")
-      if __name__=="__main__":boot()
-      EOF
-      exec python3 boot.py
+    # boot.py, zlib+base64 encoded so the command stays under Cloud Foundry's 4096-character
+    # limit. Source of truth: boot.py in this repo. Regenerate with: python3 build-manifests.py
+    command: >-
+      python3 -c "import base64,zlib;open('boot.py','wb').write(zlib.decompress(base64.b64decode('
+      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
+      Hc0F838B1LEmBw==
+      ')))" && exec python3 boot.py
