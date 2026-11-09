@@ -233,13 +233,40 @@ cf logs open-webui --recent | findstr "BOOT:"
 | `BOOT: SSO: owui-sso` | Login through Tanzu SSO |
 | `BOOT: Tika OK at http://tika-server.apps.internal:9998: Apache Tika 4.2.0` | Text extraction reachable |
 
-### B14. First login
+### B14. Show users by full name (Active Directory)
+
+Open WebUI shows each user by the SSO `name` claim, which UAA builds from the user's first and last name. If the SSO plan's LDAP provider does not map those from Active Directory, users appear by their login name (often an employee number). The Ops Manager SSO tile has no setting for this. You set it in the SSO dashboard.
+
+1. **Check that AD has the names.** In PowerShell, on a machine with the Active Directory module:
+   ```bat
+   powershell -NoProfile -Command "Get-ADUser YOUR-USER -Properties givenName,sn,mail | Select-Object givenName,sn,mail"
+   ```
+   If `givenName` or `sn` is empty, the AD team must fill them in first. Nothing on the platform can show a name AD does not have.
+2. **Open the SSO dashboard** at `https://p-identity.sys.YOUR-DOMAIN` and log in with an account that administers the SSO plan (ask the platform team if you do not have one).
+3. **Select the plan** you used in step B6 (`uaa` in the commands above), then **Manage Identity Providers**.
+4. **Edit the LDAP provider** your users already log in with. Do not create a second one if one exists (see the note below).
+5. Under **Attribute Mappings**, set:
+
+   | Field | AD attribute |
+   | --- | --- |
+   | Given Name | `givenName` |
+   | Family Name | `sn` |
+   | Email | `mail` |
+
+   AD's `displayName` cannot be used: UAA always builds the name from the given and family name.
+6. **Save.**
+
+Names update at each user's next login. Users who already logged in are fixed then too, because the manifest sets `OAUTH_UPDATE_NAME_ON_LOGIN`. Nothing in the manifest changes, and Open WebUI does not need a restart.
+
+> **No LDAP provider in the plan yet?** Create one with **New Identity Provider > LDAP**: the AD address (`ldaps://dc.corp.local:636`), a bind account, the user search base, and the search filter `sAMAccountName={0}`. Fill in the mappings from step 5. Then open the `open-webui` app in the plan's app list and enable the new provider for it. If users already logged in through a different provider, the new one creates new SSO users for them. Open WebUI still links them to their existing accounts by email.
+
+### B15. First login
 
 1. Run `cf app open-webui` and open the address under `routes:` in a browser.
 2. Click **Continue with Tanzu SSO**. **The first person to log in becomes the admin**, so the intended admin should log in first.
-3. Everyone after that waits as *pending* until the admin approves them in **Admin Panel > Users**.
+3. Everyone after that waits as *pending* until the admin approves them in **Admin Panel > Users**. Check there that users appear by full name. If not, see step B14.
 
-### B15. Test an upload
+### B16. Test an upload
 
 1. Start a chat, attach a Hebrew PDF and ask a question about it.
 2. Watch Tika receive it:
@@ -260,7 +287,7 @@ cf logs open-webui --recent | findstr "BOOT:"
 | No `embed=` model in the boot log | The bound AI plan has no embedding model. Bind one: `cf create-service ai-models tanzu-nomic-embed-text-v2 owui-embed --wait`, `cf bind-service open-webui owui-embed`, `cf restart open-webui`. |
 | `instances: 1/2` for a long time | Run `cf events open-webui` and `cf logs open-webui --recent`. A quota error means the space or org is out of memory. |
 | Push fails pulling the image | Check the image path in the manifest, the registry login (step B9), and that the platform trusts the registry certificate. |
-| Users show as numbers instead of names | The SSO plan must map `given_name` and `family_name` from your directory, typically `givenName` and `sn`. Names refresh at each user's next login. |
+| Users show as numbers or login names instead of full names | Follow step B14: map Given Name to `givenName` and Family Name to `sn` in the SSO dashboard's LDAP provider, and check AD has values in those attributes. Names refresh at each user's next login. |
 
 To change the SMB username or password after the first deployment:
 

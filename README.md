@@ -293,7 +293,7 @@ The `block-storage` offering attaches a disk to a single container. It cannot be
 
 Open WebUI shows a user's display name from one claim, set by `OAUTH_USERNAME_CLAIM`. The manifests use `name`, which UAA builds from the first and last name of the identity provider. `user_name` is the login name, which in many companies is an employee number.
 
-* If names still show as numbers after the next login, the SSO plan is not receiving names from your identity provider. In the SSO plan's identity provider settings, map `given_name` and `family_name` to the directory attributes, typically `givenName` and `sn` for Active Directory.
+* If names still show as numbers after the next login, the SSO plan is not receiving names from your identity provider. The Ops Manager SSO tile has no setting for this. Open the SSO dashboard at `https://p-identity.sys.<your-domain>`, select the plan, go to **Manage Identity Providers**, edit the LDAP provider and map Given Name and Family Name to the directory attributes: `givenName` and `sn` for Active Directory. Step-by-step: [AIRGAP-GUIDE.md, step B14](AIRGAP-GUIDE.md#b14-show-users-by-full-name-active-directory).
 * `OAUTH_UPDATE_NAME_ON_LOGIN` fixes existing users the next time they log in. There is no need to recreate them.
 * Open WebUI cannot combine two claims, so `given_name` alone would show the first name only.
 
